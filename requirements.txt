@@ -1,0 +1,6 @@
+depthai>=3.0
+ultralytics>=8.3
+lap>=0.5.12
+pygame-ce>=2.5
+opencv-python>=4.9
+numpy>=1.26
