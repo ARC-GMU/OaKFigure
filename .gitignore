@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 # Ultralytics downloads model weights automatically on first run
 *.pt
+# MediaPipe gesture model, downloaded automatically on first use
+*.task
+*.part

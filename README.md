@@ -19,7 +19,7 @@ A STEM-event demo for the OAK-D Pro camera. Eight views, each with a title and a
 | 4 | **How Far Away?** | Stick figures with a label showing how far away each person is |
 | 5 | **3D Dots** | A rotating 3D point cloud of the room. Drag with the mouse to spin it; **T** switches to rainbow colours. |
 | 6 | **Two Eyes** | The left and right stereo cameras side by side. **W** flips between them so you can see the shift. |
-| 7 | **Rock Paper Scissors** | Play the computer with your whole body: hands on head = Rock, arms out wide = Paper, arms up in a V = Scissors. Everyone in view plays at once, with a win count for each colour. **N** starts a new game. |
+| 7 | **Rock Paper Scissors** | Best of 3 against a pixel-art robot whose face reacts to every round (happy, sad, surprised, dizzy). Play with hand signs (fist = Rock, open hand = Paper, two fingers = Scissors); anyone too far away to read is told to **come closer**. **B** switches to whole-body poses (hands on head, arms out wide, arms up in a V). **N** starts a new game. |
 | 8 | **Height Meter** | Measures how tall each person is from their distance and skeleton, with a ruler beside them. Needs the whole body in view, feet included. |
 
 **Mouse:** click a tab at the bottom to change view, and **Exit** (top right) to quit.
@@ -33,6 +33,8 @@ A STEM-event demo for the OAK-D Pro camera. Eight views, each with a title and a
 | `pose.py` | Runs YOLO11 pose with ByteTrack on a background thread, smooths the joints, and measures each person's distance from the depth map |
 | `identity.py` | Permanent identities and colours, matched by clothing colour so returning people keep their colour |
 | `figures.py` | Anti-aliased stick-figure drawing and fitting the camera image to the screen |
+| `hands.py` | Reads Rock Paper Scissors hand signs with MediaPipe, on a crop around each player's raised hand |
+| `pixelart.py` | Animated pixel-art faces and hand-sign sprites |
 | `views.py` | All the views. To add one, subclass `View` and add it to `make_views()`. |
 | `main.py` | Window, flat title bar with Exit button, bottom tab bar, keyboard/mouse input, auto-cycle |
 
@@ -49,7 +51,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 #   uv alternative: uv venv && uv pip install -r requirements.txt
 ```
 
-The first run downloads `yolo11n-pose.pt` (~6 MB).
+The first run downloads `yolo11n-pose.pt` (~6 MB), and the first game of Rock Paper Scissors downloads MediaPipe's `gesture_recognizer.task` (~8 MB).
 
 ## Run
 
@@ -75,6 +77,7 @@ Or use the launcher, which takes the same options: `./run.sh --fullscreen --auto
 
 Tips:
 - Stand 1–4 m (3–13 ft) from the camera. Depth stops working closer than about 35 cm.
+- Rock Paper Scissors hand signs read best about 1–1.5 m (3–5 ft) from the camera, with the hand held up facing it. Players farther away get a "Come closer!" sign.
 - The IR dot projector (invisible, Class 1 eye-safe laser) helps depth on plain walls and floors.
 
 ## Notes

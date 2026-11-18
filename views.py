@@ -19,6 +19,8 @@ import pygame
 from camera import Frames
 from figures import (L_AN, L_EYE, L_SH, L_WR, NOSE, R_AN, R_EYE, R_SH, R_WR, Fit, draw_figure, ring,
                      thick_line, to_surface)
+from hands import PAPER, ROCK, SCISSORS, HandSigns, hand_box, too_far
+from pixelart import draw_face, draw_hand
 from pose import Person, PoseResult
 
 BG = (30, 30, 46)
@@ -377,13 +379,15 @@ def label_box(ctx: Ctx, text: str, pos, bg, fg=BG, size: int | None = None) -> p
 
 
 # --------------------------------------------------------------------------
-# Rock Paper Scissors, played with the whole body (the pose model sees wrists, not fingers)
-ROCK, PAPER, SCISSORS = "Rock", "Paper", "Scissors"
+# Rock Paper Scissors: hand signs (MediaPipe) or whole-body poses, best of 3 against the computer
 THROWS = (ROCK, PAPER, SCISSORS)
 BEATS = {ROCK: SCISSORS, PAPER: ROCK, SCISSORS: PAPER}
 WHY = {ROCK: "Rock smashes Scissors", PAPER: "Paper covers Rock", SCISSORS: "Scissors cut Paper"}
-HOW = {ROCK: "hands on head", PAPER: "arms out wide", SCISSORS: "arms up in a V"}
+HOW = {"hands": {ROCK: "make a fist", PAPER: "open hand", SCISSORS: "two fingers"},
+       "body": {ROCK: "hands on head", PAPER: "arms out wide", SCISSORS: "arms up in a V"}}
 WIN, TIE, LOSE = (166, 227, 161), (249, 226, 175), (243, 139, 168)
+CLOSER = (250, 179, 135)
+WINS_NEEDED = 2  # best of 3
 
 # little stick-figure icons: arm (shoulder, elbow, wrist) for the left side; the right side is mirrored
 _ICON_ARMS = {
@@ -412,7 +416,7 @@ def classify_throw(p: Person) -> str | None:
     return None
 
 
-def draw_throw_icon(surf, throw: str, center, size: float, color) -> None:
+def draw_body_icon(surf, throw: str, center, size: float, color) -> None:
     cx, cy = center[0], center[1] + 0.2 * size
     P = lambda x, y: (cx + x * size, cy + y * size)  # noqa: E731
     w = max(3.0, size * 0.09)
@@ -429,190 +433,331 @@ def draw_throw_icon(surf, throw: str, center, size: float, color) -> None:
 class RockPaperScissors(View):
     name = "Rock Paper Scissors"
     short = "RPS"
-    blurb = "Play the computer with your whole body! Hands on head = Rock, arms out wide = Paper, arms up in a V = Scissors."
-    hint = "N for a new game"
+    BLURBS = {
+        "hands": "Play the computer with hand signs! Fist = Rock, open hand = Paper, two fingers = Scissors. "
+                 "Win 2 rounds to win the game!",
+        "body": "Play the computer with your whole body! Hands on head = Rock, arms out wide = Paper, "
+                "arms up in a V = Scissors. Win 2 rounds to win!",
+    }
+    hint = "B switches hands/body · N new game"
     needs_pose = True
 
     BEAT = 0.75  # seconds per countdown word
     COUNT = ("Rock…", "Paper…", "Scissors…")
-    SHOOT = 0.8  # seconds to catch everyone's pose after "Shoot!"
+    SHOOT = {"hands": 1.0, "body": 0.8}  # seconds to catch everyone's throw after "Shoot!"
     REVEAL = 4.5
+    MATCH_OVER = 6.0
 
     def __init__(self):
         super().__init__()
         self.rng = random.Random()
+        self.mode = "hands"
+        self.blurb = self.BLURBS[self.mode]
+        self.hands: HandSigns | None = None
+        self.hands_seen = -1
         self.new_game()
 
+    # -- game state -----------------------------------------------------------
     def new_game(self):
         self.phase, self.t0 = "idle", 0.0
         self.computer: str | None = None
         self.votes: dict[int, Counter] = {}
         self.results: dict[int, str | None] = {}
-        self.scores: dict[int, list] = {}  # identity -> [colour, wins]
+        self.match: dict[int, dict] = {}  # identity -> {"you": wins, "cpu": wins}
+        self.round = 0
         self.live: dict[int, str | None] = {}
+        self.far: set[int] = set()
         self.last_result = None
         self.last_render = -100.0
         self.people_since: float | None = None
         self.empty_since: float | None = None
 
+    def _set_mode(self, mode):
+        self.mode = mode
+        self.blurb = self.BLURBS[mode]
+        self.new_game()
+
     def handle_event(self, ev, ctx):
         if ev.type == pygame.KEYDOWN and ev.key == pygame.K_n:
             self.new_game()
+        elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_b:
+            self._set_mode("body" if self.mode == "hands" else "hands")
 
     def _go(self, phase, now):
         self.phase, self.t0 = phase, now
 
+    @staticmethod
+    def _decided(m) -> bool:
+        return m["you"] >= WINS_NEEDED or m["cpu"] >= WINS_NEEDED
+
     def _step(self, ctx, people):
         now = ctx.now
         if now - self.last_render > 1.0:  # came back to this view: start fresh
-            self._go("idle", now)
+            self.new_game()
+            self.last_render = now
         self.last_render = now
+        present = {p.identity for p in people}
         self.people_since = (self.people_since or now) if people else None
         self.empty_since = None if people else (self.empty_since or now)
+        close = present - self.far
         t = now - self.t0
         if self.phase == "idle":
             if self.people_since is not None and now - self.people_since > 1.0:
+                self.match, self.round = {}, 0
                 self._go("ready", now)
-        elif self.empty_since is not None and now - self.empty_since > 2.0 and self.phase != "reveal":
+        elif (self.empty_since is not None and now - self.empty_since > 3.0
+              and self.phase not in ("reveal", "match_over")):
             self._go("idle", now)
-        elif self.phase == "ready" and t > 1.5:
+        elif self.phase == "ready" and t > 1.5 and close:  # wait until someone is close enough
+            self.round += 1
             self._go("count", now)
         elif self.phase == "count" and t > self.BEAT * len(self.COUNT):
             self.computer = self.rng.choice(THROWS)
             self.votes = {}
             self._go("shoot", now)
-        elif self.phase == "shoot" and t > self.SHOOT:
+        elif self.phase == "shoot" and t > self.SHOOT[self.mode]:
             self._score()
             self._go("reveal", now)
         elif self.phase == "reveal" and t > self.REVEAL:
+            playing = [m for i, m in self.match.items() if i in present]
+            if self.match and all(self._decided(m) for m in playing):
+                self._go("match_over", now)
+            else:
+                self._go("ready" if people else "idle", now)
+        elif self.phase == "match_over" and t > self.MATCH_OVER:
+            self.match, self.round = {}, 0
             self._go("ready" if people else "idle", now)
 
     def _score(self):
         self.results = {}
         for ident, votes in self.votes.items():
+            m = self.match.setdefault(ident, {"you": 0, "cpu": 0})
+            if self._decided(m):
+                continue  # this player's game is already over
             throw = votes.most_common(1)[0][0] if votes else None
             self.results[ident] = throw
-            if throw is not None and BEATS[throw] == self.computer:
-                self.scores[ident][1] += 1
+            if throw is None or throw == self.computer:
+                continue
+            m["you" if BEATS[throw] == self.computer else "cpu"] += 1
 
+    def _outcome(self, ident) -> str | None:
+        throw = self.results.get(ident)
+        if throw is None:
+            return None
+        return "tie" if throw == self.computer else ("win" if BEATS[throw] == self.computer else "lose")
+
+    def _computer_mood(self) -> tuple[str, str]:
+        if self.phase == "count":
+            return "thinking", "Hmm…"
+        if self.phase == "shoot":
+            return "surprised", "Shoot!"
+        if self.phase == "reveal":
+            outs = [self._outcome(i) for i in self.results]
+            kid, cpu = outs.count("win"), outs.count("lose")
+            if cpu > kid:
+                return "happy", "Yes! I win!"
+            if kid > cpu:
+                return "sad", "Aww, you got me!"
+            if outs.count("tie"):
+                return "surprised", "Whoa, same!"
+            return "thinking", "Did you throw?"
+        if self.phase == "match_over":
+            ms = list(self.match.values())
+            kid = sum(m["you"] >= WINS_NEEDED for m in ms)
+            cpu = sum(m["cpu"] >= WINS_NEEDED for m in ms)
+            return ("party", "I'm the champion!") if cpu > kid else ("dizzy", "You beat me!")
+        if self.phase == "ready" and self.far and not ({p for p in self.live} - self.far):
+            return "thinking", "Come closer!"
+        return "idle", "Let's play!" if self.phase == "ready" else "Wanna play?"
+
+    # -- reading throws -------------------------------------------------------
+    def _read_throws(self, ctx, people):
+        """Update self.live / self.far; add votes while the shoot window is open."""
+        if self.mode == "hands":
+            if self.hands is None:
+                self.hands = HandSigns()
+            if self.hands.error is not None:  # MediaPipe missing or failed: play with bodies instead
+                self._set_mode("body")
+                return
+            self.far = {p.identity for p in people if too_far(p)}
+            if ctx.result is not self.last_result:
+                self.hands.submit(ctx.result.frames, [p for p in people if p.identity not in self.far])
+            version, signs = self.hands.latest()
+            fresh = version != self.hands_seen
+            self.hands_seen = version
+            self.live = {p.identity: signs.get(p.identity) for p in people}
+        else:
+            self.far = set()
+            fresh = ctx.result is not self.last_result
+            if fresh:
+                self.live = {p.identity: classify_throw(p) for p in people}
+        self.last_result = ctx.result
+        if fresh and self.phase == "shoot":
+            for p in people:
+                if p.identity in self.far:
+                    continue  # too far away to play this round
+                c = self.votes.setdefault(p.identity, Counter())
+                if self.live.get(p.identity):
+                    c[self.live[p.identity]] += 1
+
+    # -- drawing ----------------------------------------------------------------
     def render(self, ctx):
         if ctx.result is None:
             return center_text(ctx, ["Looking for people…"])
         people = ctx.result.people
-        if ctx.result is not self.last_result:  # a new pose estimate arrived
-            self.last_result = ctx.result
-            self.live = {p.identity: classify_throw(p) for p in people}
-            for p in people:
-                self.scores.setdefault(p.identity, [p.color, 0])[0] = p.color
-            if self.phase == "shoot":
-                for p in people:
-                    c = self.votes.setdefault(p.identity, Counter())
-                    if self.live[p.identity]:
-                        c[self.live[p.identity]] += 1
+        self._read_throws(ctx, people)
         self._step(ctx, people)
 
         fit = Fit(ctx.result.frame_size, ctx.area, ctx.mirror)
         dim_camera(self, ctx, fit, 0.3)
         tops = draw_people(ctx, fit, width_scale=1.1)
-        a = ctx.area
-        t = ctx.now - self.t0
-        big = ctx.font(max(40, a.h // 9), bold=True)
+        if self.mode == "hands":
+            self._hand_boxes(ctx, fit, people)
+        self._player_labels(ctx, people, tops)
+        self._banner(ctx)
+        self._computer_panel(ctx)
+        self._scoreboard(ctx, people)
+        self._legend(ctx)
 
-        # labels above each player
-        small = max(20, a.h // 28)
+    def _hand_boxes(self, ctx, fit, people):
+        """Show which hand the camera is reading."""
+        for p in people:
+            hb = hand_box(p)
+            if hb is None or p.identity in self.far:
+                continue
+            (x0, y0, x1, y1), _ = hb
+            pts = fit.points(np.array([[x0, y0], [x1, y1]], float))
+            rect = pygame.Rect(int(pts[:, 0].min()), int(pts[:, 1].min()),
+                               int(abs(pts[1, 0] - pts[0, 0])), int(abs(pts[1, 1] - pts[0, 1])))
+            pygame.draw.rect(ctx.screen, p.color, rect, 3, border_radius=10)
+
+    def _player_labels(self, ctx, people, tops):
+        small = max(20, ctx.area.h // 28)
+        face = max(60, ctx.area.h // 6)
         for p in people:
             if p.identity not in tops:
                 continue
-            if self.phase == "reveal":
-                if p.identity not in self.results:
+            top = tops[p.identity]
+            m = self.match.get(p.identity)
+            if self.phase == "match_over" and m:
+                won = m["you"] >= WINS_NEEDED
+                box = label_box(ctx, "Champion!" if won else "Good try!", top, WIN if won else TIE)
+                draw_face(ctx.screen, "party" if won else "sad", (box.left - face * 0.6, box.centery),
+                          face, ctx.now, "kid")
+            elif self.phase == "reveal" and p.identity in self.results:
+                out = self._outcome(p.identity)
+                if out is None:
+                    label_box(ctx, "No throw?", top, SUBTLE, size=small)
                     continue
-                throw = self.results[p.identity]
-                if throw is None:
-                    label_box(ctx, "No throw?", tops[p.identity], SUBTLE, size=small)
-                    continue
-                outcome = ("You win!", WIN) if BEATS[throw] == self.computer else (
-                    ("Tie!", TIE) if throw == self.computer else ("Computer wins", LOSE))
-                box = label_box(ctx, outcome[0], tops[p.identity], outcome[1])
-                label_box(ctx, throw, box.midtop, p.color, size=small)
+                text, color, mood = {"win": ("You win!", WIN, "happy"), "tie": ("Tie!", TIE, "surprised"),
+                                     "lose": ("Computer wins", LOSE, "sad")}[out]
+                box = label_box(ctx, text, top, color)
+                label_box(ctx, self.results[p.identity], box.midtop, p.color, size=small)
+                draw_face(ctx.screen, mood, (box.left - face * 0.6, box.centery), face, ctx.now, "kid")
+            elif m and self._decided(m) and self.phase != "idle":
+                label_box(ctx, "Done! Wait for the others", top, SUBTLE, size=small)
+            elif p.identity in self.far:
+                label_box(ctx, "Come closer!", top, CLOSER, size=small)
             elif self.live.get(p.identity):
-                label_box(ctx, self.live[p.identity], tops[p.identity], p.color, size=small)
+                label_box(ctx, self.live[p.identity], top, p.color, size=small)
 
-        # the big words in the middle
+    def _banner(self, ctx):
+        a = ctx.area
+        t = ctx.now - self.t0
+        anyone_close = bool(set(self.live) - self.far)
         if self.phase == "idle":
             words = "Step in to play!"
         elif self.phase == "ready":
-            words = "Get ready!"
+            words = "Come closer!" if not anyone_close and self.live else f"Round {self.round + 1}"
         elif self.phase == "count":
             words = self.COUNT[min(int(t / self.BEAT), len(self.COUNT) - 1)]
         elif self.phase == "shoot":
             words = "SHOOT!"
-        else:
-            words = ""
-        if words:
-            img = big.render(words, True, (255, 255, 255))
-            box = img.get_rect(center=(a.centerx, a.y + a.h * 0.16)).inflate(40, 16)
-            pygame.draw.rect(ctx.screen, (0, 0, 0), box, border_radius=14)
-            ctx.screen.blit(img, img.get_rect(center=box.center))
-
-        self._computer_panel(ctx)
-        self._scoreboard(ctx)
-        self._legend(ctx)
+        else:  # reveal / match over: the labels and the computer's face tell the story
+            return
+        img = ctx.font(max(40, a.h // 9), bold=True).render(words, True, (255, 255, 255))
+        box = img.get_rect(center=(a.centerx, a.y + a.h * 0.14)).inflate(40, 16)
+        pygame.draw.rect(ctx.screen, CLOSER if words == "Come closer!" else (0, 0, 0), box, border_radius=14)
+        ctx.screen.blit(img, img.get_rect(center=box.center))
 
     def _computer_panel(self, ctx):
         a = ctx.area
-        w, h = max(170, a.w // 6), max(200, a.h // 3)
+        w = max(200, a.w // 5)
+        f = ctx.font(max(18, a.h // 32), bold=True)
+        face = w * 0.62
+        show_throw = self.phase in ("shoot", "reveal") and self.computer
+        icon = face * 0.62
+        h = int(face + f.get_linesize() * 2 + (icon + f.get_linesize() if show_throw else 0) + 36)
         panel = pygame.Rect(a.right - w - 20, a.y + 20, w, h)
         pygame.draw.rect(ctx.screen, (17, 17, 27), panel, border_radius=14)
-        f = ctx.font(max(20, a.h // 30), bold=True)
-        img = f.render("Computer", True, TEXT)
-        ctx.screen.blit(img, img.get_rect(midtop=(panel.centerx, panel.y + 10)))
-        body = pygame.Rect(panel.x, panel.y + img.get_height() + 16, w, h - img.get_height() - 26)
-        if self.phase in ("shoot", "reveal") and self.computer:
-            draw_throw_icon(ctx.screen, self.computer, (body.centerx, body.centery - 14), body.h * 0.42,
-                            (137, 180, 250))
-            name = f.render(self.computer, True, (137, 180, 250))
-            ctx.screen.blit(name, name.get_rect(midbottom=(body.centerx, body.bottom)))
-        else:
-            q = ctx.font(max(48, a.h // 6), bold=True).render("?", True, SUBTLE)
-            ctx.screen.blit(q, q.get_rect(center=body.center))
+        mood, says = self._computer_mood()
+        y = panel.y + 10
+        draw_face(ctx.screen, mood, (panel.centerx, y + face / 2), face, ctx.now)
+        y += face + 4
+        for text, color in (("Computer", TEXT), (says, SUBTLE)):
+            img = f.render(text, True, color)
+            ctx.screen.blit(img, img.get_rect(midtop=(panel.centerx, y)))
+            y += f.get_linesize()
+        if show_throw:
+            y += 6
+            if self.mode == "hands":
+                draw_hand(ctx.screen, self.computer, (panel.centerx, y + icon / 2), icon, (137, 180, 250))
+            else:
+                draw_body_icon(ctx.screen, self.computer, (panel.centerx, y + icon / 2), icon * 0.55,
+                               (137, 180, 250))
+            img = f.render(self.computer, True, (137, 180, 250))
+            ctx.screen.blit(img, img.get_rect(midtop=(panel.centerx, y + icon)))
         if self.phase == "reveal" and self.computer:
-            f2 = ctx.font(max(18, a.h // 34), bold=True)
             y = panel.bottom + 8
             for throw in THROWS:  # explain each rule that decided a game this round
                 if throw in self.results.values() and throw != self.computer:
                     winner = throw if BEATS[throw] == self.computer else self.computer
-                    msg = f2.render(WHY[winner], True, TEXT)
-                    ctx.screen.blit(msg, msg.get_rect(midtop=(panel.centerx, y)))
-                    y += f2.get_linesize()
+                    img = f.render(WHY[winner], True, TEXT)
+                    ctx.screen.blit(img, img.get_rect(midtop=(panel.centerx, y)))
+                    y += f.get_linesize()
 
-    def _scoreboard(self, ctx):
-        live = {p.identity for p in ctx.result.people}
-        rows = [(i, c, n) for i, (c, n) in sorted(self.scores.items()) if i in live]
-        if not rows:
-            return
-        f = ctx.font(max(20, ctx.area.h // 30), bold=True)
+    def _scoreboard(self, ctx, people):
+        rows = [(p.color, self.match[p.identity]) for p in sorted(people, key=lambda q: q.identity)
+                if p.identity in self.match]
+        f = ctx.font(max(18, ctx.area.h // 32), bold=True)
         x, y = ctx.area.x + 20, ctx.area.y + 20
-        ctx.screen.blit(f.render("Wins", True, TEXT), (x, y))
-        y += f.get_linesize() + 4
+        ctx.screen.blit(f.render("Best of 3", True, TEXT), (x, y))
+        y += f.get_linesize() + 6
         r = f.get_height() // 2
-        for _, color, n in rows:
+        pip = max(5, r // 2)
+        for color, m in rows:
             pygame.draw.circle(ctx.screen, color, (x + r, y + r), r)
-            ctx.screen.blit(f.render(str(n), True, TEXT), (x + 2 * r + 10, y))
-            y += f.get_linesize() + 4
+            px = x + 2 * r + 12
+            for who, c in (("you", WIN), ("cpu", LOSE)):  # filled pips = rounds won
+                for k in range(WINS_NEEDED):
+                    cx = px + pip + k * (pip * 2 + 6)
+                    pygame.draw.circle(ctx.screen, c, (cx, y + r), pip, 0 if m[who] > k else 2)
+                px += WINS_NEEDED * (pip * 2 + 6) + 6
+                if who == "you":
+                    dash = f.render("vs", True, SUBTLE)
+                    ctx.screen.blit(dash, dash.get_rect(midleft=(px, y + r)))
+                    px += dash.get_width() + 8
+            y += f.get_linesize() + 6
+        if rows:
+            note = ctx.font(max(14, ctx.area.h // 46)).render("you  vs  computer", True, SUBTLE)
+            ctx.screen.blit(note, (x + 2 * r + 12, y))
 
     def _legend(self, ctx):
         a = ctx.area
         f = ctx.font(max(16, a.h // 40), bold=True)
         slot = min(220, a.w // 5)
-        size = max(36, a.h // 12)
+        size = max(48, a.h // 9)
         y = a.bottom - f.get_linesize() * 2 - 12
-        backing = pygame.Surface((slot * 3, int(size * 1.9) + f.get_linesize() * 2), pygame.SRCALPHA)
+        backing = pygame.Surface((slot * 3, int(size * 1.35) + f.get_linesize() * 2), pygame.SRCALPHA)
         backing.fill((17, 17, 27, 210))
         ctx.screen.blit(backing, backing.get_rect(midbottom=(a.centerx, a.bottom - 4)))
         for i, throw in enumerate(THROWS):
             cx = a.centerx + (i - 1) * slot
-            draw_throw_icon(ctx.screen, throw, (cx, y - size * 0.75), size, TEXT)
-            for j, line in enumerate((throw, HOW[throw])):
+            if self.mode == "hands":
+                draw_hand(ctx.screen, throw, (cx, y - size * 0.55), size, TEXT)
+            else:
+                draw_body_icon(ctx.screen, throw, (cx, y - size * 0.6), size * 0.75, TEXT)
+            for j, line in enumerate((throw, HOW[self.mode][throw])):
                 img = f.render(line, True, TEXT if j == 0 else SUBTLE)
                 ctx.screen.blit(img, img.get_rect(midtop=(cx, y + j * f.get_linesize())))
 
