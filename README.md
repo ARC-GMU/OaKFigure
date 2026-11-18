@@ -1,5 +1,14 @@
 # OaKFigure
 
+[![Python](https://img.shields.io/badge/python-3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![DepthAI](https://img.shields.io/badge/DepthAI-v3-5C2D91)](https://docs.luxonis.com/)
+[![Camera](https://img.shields.io/badge/camera-OAK--D%20Pro-0A7BBB)](https://shop.luxonis.com/)
+[![YOLO11 Pose](https://img.shields.io/badge/YOLO11-pose-111F68)](https://docs.ultralytics.com/tasks/pose/)
+[![OpenCV](https://img.shields.io/badge/OpenCV-4.9+-5C3EE8?logo=opencv&logoColor=white)](https://opencv.org/)
+[![pygame-ce](https://img.shields.io/badge/pygame--ce-2.5+-6AA84F)](https://pyga.me/)
+[![Platform](https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black)](#setup)
+[![Last commit](https://img.shields.io/github/last-commit/ARC-GMU/OaKFigure)](https://github.com/ARC-GMU/OaKFigure/commits/main)
+
 A STEM-event demo for the OAK-D Pro camera. Six views, each with a title and a one-line explanation for kids:
 
 | # | View | What it shows |
