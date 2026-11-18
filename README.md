@@ -9,7 +9,7 @@
 [![Platform](https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black)](#setup)
 [![Last commit](https://img.shields.io/github/last-commit/ARC-GMU/OaKFigure)](https://github.com/ARC-GMU/OaKFigure/commits/main)
 
-A STEM-event demo for the OAK-D Pro camera. Six views, each with a title and a one-line explanation for kids:
+A STEM-event demo for the OAK-D Pro camera. Eight views, each with a title and a one-line explanation for kids:
 
 | # | View | What it shows |
 |---|---|---|
@@ -19,9 +19,11 @@ A STEM-event demo for the OAK-D Pro camera. Six views, each with a title and a o
 | 4 | **How Far Away?** | Stick figures with a label showing how far away each person is |
 | 5 | **3D Dots** | A rotating 3D point cloud of the room. Drag with the mouse to spin it; **T** switches to rainbow colours. |
 | 6 | **Two Eyes** | The left and right stereo cameras side by side. **W** flips between them so you can see the shift. |
+| 7 | **Rock Paper Scissors** | Play the computer with your whole body: hands on head = Rock, arms out wide = Paper, arms up in a V = Scissors. Everyone in view plays at once, with a win count for each colour. **N** starts a new game. |
+| 8 | **Height Meter** | Measures how tall each person is from their distance and skeleton, with a ruler beside them. Needs the whole body in view, feet included. |
 
 **Mouse:** click a tab at the bottom to change view, and **Exit** (top right) to quit.
-**Keys:** 1–6 or ←/→ (or Space) change view · **A** auto-cycle · **M** mirror · **F** fullscreen · **H** hide the bars · **Q/Esc** quit
+**Keys:** 1–8 or ←/→ (or Space) change view · **A** auto-cycle · **M** mirror · **F** fullscreen · **H** hide the bars · **Q/Esc** quit
 
 ## How it works
 

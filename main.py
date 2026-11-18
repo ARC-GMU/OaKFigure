@@ -5,7 +5,7 @@
     ./run.sh --source 0          # webcam (only the stick-figure views work)
 
 Mouse: click a tab to change view, click Exit to quit.
-Keys: 1-6 / ←→ change view · A auto-cycle · F fullscreen · M mirror · H hide bars · Q/Esc quit
+Keys: 1-8 / ←→ change view · A auto-cycle · F fullscreen · M mirror · H hide bars · Q/Esc quit
 """
 
 from __future__ import annotations
